@@ -4,6 +4,7 @@ import { bot } from './bot.js'
 import { refreshCache } from './cache.js'
 import { runDailyBrief } from './daily-brief.js'
 import { createResearchRequestRouter } from './api/research-request.js'
+import { createMeetingIngestRouter } from './api/meeting-ingest.js'
 
 const app = express()
 app.use(express.json())
@@ -15,6 +16,9 @@ app.get('/', (_req, res) => {
 
 // Dashboard research request endpoint
 app.use(createResearchRequestRouter())
+
+// Fathom meeting ingest endpoint (via Zapier)
+app.use(createMeetingIngestRouter())
 
 const PORT = Number(process.env.PORT) || 3000
 app.listen(PORT, () => console.log(`Server on port ${PORT}`))
