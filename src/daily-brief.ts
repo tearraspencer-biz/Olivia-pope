@@ -91,6 +91,13 @@ async function researchAndFile(topic: string): Promise<BriefEntry> {
   const researchOutput = await runResearch(topic)
   const { categories, projects } = await getCache()
   const structured = await structureResearch(topic, researchOutput, categories, projects)
+
+  // Tag as daily-brief so the Daily Briefings dashboard page can identify it
+  if (!structured.tags) structured.tags = []
+  if (!structured.tags.includes('daily-brief')) {
+    structured.tags = ['daily-brief', ...structured.tags]
+  }
+
   const result = await saveResearch(structured, topic, categories, projects)
   return { result, structured }
 }
