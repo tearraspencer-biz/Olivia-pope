@@ -27,6 +27,11 @@ bot.command('help', async (ctx) => {
 
 bot.command('research', handleResearch)
 
+// Returns the chat ID so TELEGRAM_CHAT_ID env var can be set for daily briefs
+bot.command('chatid', async (ctx) => {
+  await ctx.reply(`Your chat ID is: ${ctx.chat.id}`)
+})
+
 bot.on('message:text', handleMessage)
 
 bot.catch((err) => {

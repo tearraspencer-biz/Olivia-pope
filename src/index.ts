@@ -1,6 +1,8 @@
 import http from 'http'
+import cron from 'node-cron'
 import { bot } from './bot.js'
 import { refreshCache } from './cache.js'
+import { runDailyBrief } from './daily-brief.js'
 
 // Minimal health server so Railway's health check passes
 const PORT = Number(process.env.PORT) || 3000
@@ -15,6 +17,17 @@ http
 refreshCache()
   .then(() => console.log('Startup cache loaded.'))
   .catch((err) => console.error('Cache load failed (will retry on first request):', err))
+
+// Daily brief — 7:00am ET every day (handles EST/EDT automatically)
+cron.schedule(
+  '0 7 * * *',
+  async () => {
+    console.log('[Cron] Daily brief triggered')
+    await runDailyBrief()
+  },
+  { timezone: 'America/New_York' }
+)
+console.log('Daily brief scheduled: 7:00am ET every day.')
 
 // Start polling with retry on 409 conflict (Railway deployment rollover)
 async function startPolling(attempt = 1): Promise<void> {
