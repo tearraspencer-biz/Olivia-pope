@@ -1,17 +1,23 @@
-import http from 'http'
+import express from 'express'
 import cron from 'node-cron'
 import { bot } from './bot.js'
 import { refreshCache } from './cache.js'
 import { runDailyBrief } from './daily-brief.js'
+import { createResearchRequestRouter } from './api/research-request.js'
 
-// Minimal health server so Railway's health check passes
+const app = express()
+app.use(express.json())
+
+// Health check
+app.get('/', (_req, res) => {
+  res.status(200).send('Olivia Pope Intelligence Agent — online.')
+})
+
+// Dashboard research request endpoint
+app.use(createResearchRequestRouter())
+
 const PORT = Number(process.env.PORT) || 3000
-http
-  .createServer((_req, res) => {
-    res.writeHead(200)
-    res.end('Olivia Pope Intelligence Agent — online.')
-  })
-  .listen(PORT, () => console.log(`Health server on port ${PORT}`))
+app.listen(PORT, () => console.log(`Server on port ${PORT}`))
 
 // Pre-load categories and projects cache before bot starts
 refreshCache()

@@ -16,7 +16,7 @@ function generatePersonSlug(personName: string): string {
     .replace(/\s+/g, '-')
 }
 
-function enforcePersonTags(tags: string[], personName: string): string[] {
+export function enforcePersonTags(tags: string[], personName: string): string[] {
   const personSlug = generatePersonSlug(personName)
   const requiredTags = [personSlug, 'thought-leader']
   const existingTags = tags ?? []
@@ -40,7 +40,7 @@ function parsePersonCommand(raw: string): { personName: string; specificTopic: s
   return { personName, specificTopic }
 }
 
-function buildResearchTopic(personName: string, specificTopic: string | null): string {
+export function buildResearchTopic(personName: string, specificTopic: string | null): string {
   if (specificTopic) {
     return (
       `Research what ${personName} specifically teaches about "${specificTopic}". ` +
