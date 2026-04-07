@@ -1,93 +1,129 @@
 import { createClient } from '@supabase/supabase-js'
-import type { ResearchResult } from './claude.js'
+import type { StructuredResearch } from './claude.js'
+import type { CategoryRecord, ProjectRecord } from '../cache.js'
 
-const supabase = createClient(
+// Service role client for all writes — bypasses RLS
+const writeClient = createClient(
   process.env.SUPABASE_URL!,
-  process.env.SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+export interface SaveResult {
+  outputId: string
+  categoryName: string
+  projectName: string | null
+  tags: string[]
+  summary: string
+  outputTitle: string
+}
+
 export async function saveResearch(
-  result: ResearchResult,
-  originalQuery: string
-): Promise<string | null> {
-  try {
-    // 1. Create research task
-    const { data: task, error: taskError } = await supabase
-      .from('research_tasks')
-      .insert({
-        title: result.title,
-        status: 'complete',
-        prompt_used: originalQuery,
-      })
-      .select()
-      .single()
+  structured: StructuredResearch,
+  originalQuery: string,
+  categories: CategoryRecord[],
+  projects: ProjectRecord[]
+): Promise<SaveResult> {
+  // Step 1 — Insert research task
+  const { data: task, error: taskError } = await writeClient
+    .from('research_tasks')
+    .insert({
+      title: structured.task_title,
+      prompt_used: originalQuery,
+      category_id: structured.category_id,
+      project_id: structured.project_id || null,
+      status: 'complete',
+    })
+    .select()
+    .single()
 
-    if (taskError || !task) {
-      console.error('Failed to create research task:', taskError)
-      return null
-    }
+  if (taskError || !task) {
+    throw new Error('Task insert failed')
+  }
 
-    // 2. Look up category by name
-    const { data: category } = await supabase
-      .from('categories')
+  // Step 2 — Resolve or create tags
+  const tagIds: string[] = []
+  for (const tagName of structured.tags ?? []) {
+    const slug = slugify(tagName)
+    if (!slug) continue
+
+    const { data: existing } = await writeClient
+      .from('tags')
       .select('id')
-      .eq('name', result.category)
-      .single()
+      .eq('slug', slug)
+      .maybeSingle()
 
-    // 3. Create research output
-    const { data: output, error: outputError } = await supabase
-      .from('research_outputs')
-      .insert({
-        task_id: task.id,
-        category_id: category?.id ?? null,
-        title: result.title,
-        summary: result.summary,
-        full_text: result.full_text,
-        source_notes: result.source_notes ?? null,
-        is_starred: false,
-        is_archived: false,
-      })
-      .select()
-      .single()
-
-    if (outputError || !output) {
-      console.error('Failed to create research output:', outputError)
-      return null
-    }
-
-    // 4. Handle tags — upsert each, then link to output
-    for (const tagName of result.tags) {
-      const slug = tagName
-        .toLowerCase()
-        .trim()
-        .replace(/\s+/g, '-')
-        .replace(/[^a-z0-9-]/g, '')
-
-      if (!slug) continue
-
-      const { data: tag, error: tagError } = await supabase
+    if (existing) {
+      tagIds.push(existing.id)
+    } else {
+      const { data: newTag, error: tagCreateError } = await writeClient
         .from('tags')
-        .upsert({ name: tagName, slug }, { onConflict: 'slug' })
+        .insert({ name: tagName, slug })
         .select()
         .single()
 
-      if (tagError || !tag) {
-        console.warn(`Skipping tag "${tagName}":`, tagError)
+      if (tagCreateError || !newTag) {
+        console.warn(`Could not create tag "${tagName}":`, tagCreateError?.message)
         continue
       }
-
-      const { error: junctionError } = await supabase
-        .from('research_output_tags')
-        .insert({ output_id: output.id, tag_id: tag.id })
-
-      if (junctionError) {
-        console.warn(`Failed to link tag "${tagName}":`, junctionError)
-      }
+      tagIds.push(newTag.id)
     }
+  }
 
-    return output.id as string
-  } catch (err) {
-    console.error('saveResearch error:', err)
-    return null
+  // Step 3 — Insert research output
+  const { data: output, error: outputError } = await writeClient
+    .from('research_outputs')
+    .insert({
+      task_id: task.id,
+      title: structured.output_title,
+      summary: structured.summary,
+      full_text: structured.full_text,
+      source_notes: structured.source_notes || null,
+      category_id: structured.category_id,
+      project_id: structured.project_id || null,
+      is_starred: false,
+      is_archived: false,
+    })
+    .select()
+    .single()
+
+  if (outputError || !output) {
+    throw new Error('Output insert failed')
+  }
+
+  // Step 4 — Insert tag junction records
+  if (tagIds.length > 0) {
+    const junctions = tagIds.map((tagId) => ({ output_id: output.id, tag_id: tagId }))
+    const { error: junctionError } = await writeClient
+      .from('research_output_tags')
+      .insert(junctions)
+
+    if (junctionError) {
+      throw new Error('Tag junction insert failed')
+    }
+  }
+
+  // Step 5 — Resolve names for confirmation message
+  const category = categories.find((c) => c.id === structured.category_id)
+  const project = structured.project_id
+    ? projects.find((p) => p.id === structured.project_id)
+    : null
+
+  return {
+    outputId: output.id as string,
+    categoryName: category?.name ?? 'Other',
+    projectName: project?.name ?? null,
+    tags: structured.tags ?? [],
+    summary: structured.summary,
+    outputTitle: structured.output_title,
   }
 }
