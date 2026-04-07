@@ -47,8 +47,8 @@ async function updateMeetingStatus(
 async function processMeeting(meetingId: string, data: MeetingData): Promise<void> {
   console.log(`[Meeting Ingest] Processing ${meetingId}: "${data.title}"`)
 
-  if (!data.transcript || data.transcript.length < 100) {
-    const msg = 'Transcript too short to process. Meeting may not have been recorded properly.'
+  if (!data.transcript || data.transcript.length < 50) {
+    const msg = 'Meeting content too short to process. Summary or transcript may be missing.'
     console.warn(`[Meeting Ingest] ${meetingId}: ${msg}`)
     await updateMeetingStatus(meetingId, 'failed', msg)
     return
@@ -149,8 +149,10 @@ export function createMeetingIngestRouter(): Router {
       transcript?: string
     }
 
-    if (!title || !transcript) {
-      res.status(400).json({ error: 'Missing required fields: title and transcript' })
+    // Accept summary as fallback when no raw transcript — Fathom Zapier provides AI summary only
+    const primaryContent = transcript || summary
+    if (!title || !primaryContent) {
+      res.status(400).json({ error: 'Missing required fields: title and either transcript or summary' })
       return
     }
 
@@ -164,7 +166,7 @@ export function createMeetingIngestRouter(): Router {
         attendees: attendees ?? null,
         fathom_summary: summary ?? null,
         fathom_action_items: action_items ?? null,
-        full_transcript: transcript,
+        full_transcript: primaryContent, // raw transcript if provided, AI summary as fallback
         processing_status: 'pending',
       })
       .select('id')
@@ -179,8 +181,16 @@ export function createMeetingIngestRouter(): Router {
     // Acknowledge immediately
     res.status(202).json({ message: 'Meeting received — processing', meetingId: meeting.id })
 
-    // Process asynchronously
-    const meetingData: MeetingData = { title, date, duration, attendees, summary, action_items, transcript }
+    // Process asynchronously — use raw transcript if provided, AI summary as fallback
+    const meetingData: MeetingData = {
+      title,
+      date,
+      duration,
+      attendees,
+      summary,
+      action_items,
+      transcript: primaryContent,
+    }
     processMeeting(meeting.id as string, meetingData)
   })
 

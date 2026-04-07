@@ -103,7 +103,7 @@ ${data.summary ?? 'Not provided'}
 FATHOM ACTION ITEMS:
 ${data.action_items ?? 'Not provided'}
 
-FULL TRANSCRIPT:
+MEETING CONTENT (full transcript or AI-generated summary — process whichever is provided):
 ${truncated}
 
 Tearra's business context:
