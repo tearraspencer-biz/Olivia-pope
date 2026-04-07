@@ -87,6 +87,7 @@ export async function saveResearch(
       title: structured.output_title,
       summary: structured.summary,
       full_text: structured.full_text,
+      plain_language_breakdown: structured.plain_language_breakdown || null,
       source_notes: structured.source_notes || null,
       category_id: structured.category_id,
       project_id: structured.project_id || null,

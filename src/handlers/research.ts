@@ -75,6 +75,10 @@ export async function handleResearch(ctx: CommandContext<Context>) {
       ? `\nView in dashboard → ${DASHBOARD_URL}/research/${result.outputId}`
       : ''
 
+    const breakdownLine = structured.plain_language_breakdown
+      ? `\n📊 Full breakdown with revenue opportunity, content angle, and action signal available in the dashboard.`
+      : `\n⚠️ Note: Plain language breakdown was not generated for this entry. Full research is filed — breakdown can be added manually in the dashboard.`
+
     const confirmation =
       `✅ Research filed to Intelligence Hub.\n\n` +
       `📄 ${result.outputTitle}\n` +
@@ -82,6 +86,7 @@ export async function handleResearch(ctx: CommandContext<Context>) {
       `${projectLine}` +
       `${tagLine}` +
       `\n${summaryText}` +
+      breakdownLine +
       dashboardLink
 
     await ctx.api.editMessageText(ctx.chat.id, ackMsg.message_id, confirmation)
