@@ -43,11 +43,15 @@ export async function handleResearch(ctx: CommandContext<Context>) {
     })
   } catch (err) {
     console.error('Research handler error:', err)
-    await ctx.api.editMessageText(
-      ctx.chat.id,
-      ackMsg.message_id,
-      'Tearra, I hit a snag pulling that intelligence. Check the logs and try again.'
-    )
+    try {
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        ackMsg.message_id,
+        'Tearra, I hit a snag pulling that intelligence. Check the logs and try again.'
+      )
+    } catch {
+      // suppress reply errors
+    }
   }
 }
 

@@ -10,6 +10,10 @@ export async function handleMessage(ctx: Context) {
     await ctx.reply(response)
   } catch (err) {
     console.error('Message handler error:', err)
-    await ctx.reply('Tearra, I ran into an issue. Try again.')
+    try {
+      await ctx.reply('Tearra, I ran into an issue. Try again.')
+    } catch {
+      // suppress reply errors (e.g. invalid chat)
+    }
   }
 }
