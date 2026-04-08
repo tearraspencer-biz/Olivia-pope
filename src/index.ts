@@ -15,6 +15,16 @@ app.get('/', (_req, res) => {
   res.status(200).send('Olivia Pope Intelligence Agent — online.')
 })
 
+// Debug echo — POST anything here to see exactly what the server receives
+app.post('/api/echo', (req, res) => {
+  res.json({
+    body: req.body,
+    body_keys: Object.keys(req.body ?? {}),
+    content_type: req.headers['content-type'],
+    has_auth: !!req.headers['x-api-key'],
+  })
+})
+
 // Dashboard research request endpoint
 app.use(createResearchRequestRouter())
 
