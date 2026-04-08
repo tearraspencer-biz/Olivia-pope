@@ -173,7 +173,7 @@ export function createMeetingIngestRouter(): Router {
       .insert({
         title,
         meeting_date: date ?? null,
-        duration_minutes: duration ? Number(duration) : null,
+        duration_minutes: duration ? Math.round(Number(duration)) : null,
         attendees: attendees ?? null,
         fathom_summary: summary ?? null,
         fathom_action_items: action_items ?? null,
@@ -184,8 +184,8 @@ export function createMeetingIngestRouter(): Router {
       .single()
 
     if (insertError || !meeting) {
-      console.error('[Meeting Ingest] Insert failed:', insertError?.message)
-      res.status(500).json({ error: 'Database insert failed' })
+      console.error('[Meeting Ingest] Insert failed:', insertError?.message, insertError?.details, insertError?.hint)
+      res.status(500).json({ error: 'Database insert failed', detail: insertError?.message, hint: insertError?.hint })
       return
     }
 
