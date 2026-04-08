@@ -1,5 +1,5 @@
 import type { Router, Request, Response } from 'express'
-import { Router as createRouter } from 'express'
+import { Router as createRouter, raw as expressRaw } from 'express'
 import { createClient } from '@supabase/supabase-js'
 import {
   classifyAndStructureMeeting,
@@ -131,7 +131,8 @@ async function processMeeting(meetingId: string, data: MeetingData): Promise<voi
 export function createMeetingIngestRouter(): Router {
   const router = createRouter()
 
-  router.post('/api/meeting-ingest', async (req: Request, res: Response) => {
+  // expressRaw captures the body as a Buffer BEFORE any other middleware touches the stream
+  router.post('/api/meeting-ingest', expressRaw({ type: '*/*', limit: '10mb' }), async (req: Request, res: Response) => {
     // Validate API key
     const apiKey = req.headers['x-api-key']
     if (!OLIVIA_API_KEY || apiKey !== OLIVIA_API_KEY) {
@@ -139,50 +140,38 @@ export function createMeetingIngestRouter(): Router {
       return
     }
 
-    const contentType = req.headers['content-type'] ?? ''
-    console.log('[Meeting Ingest] Content-Type:', contentType, '| body keys:', Object.keys(req.body ?? {}))
+    // req.body is a Buffer when using expressRaw
+    const rawBody = Buffer.isBuffer(req.body) ? req.body.toString('utf-8') : String(req.body ?? '')
+    console.log('[Meeting Ingest] Content-Type:', req.headers['content-type'], '| raw length:', rawBody.length)
 
-    // Read raw body manually — bypasses express middleware edge cases with large payloads
-    let rawBody = ''
-    await new Promise<void>((resolve) => {
-      req.on('data', (chunk: Buffer) => { rawBody += chunk.toString() })
-      req.on('end', resolve)
-    })
-
-    // Try JSON parse of raw body first, then fall back to already-parsed req.body
-    let payload: Record<string, string> = {}
-    if (rawBody) {
+    let payload: Record<string, any> = {}
+    try {
+      const parsed = JSON.parse(rawBody)
+      // Handle both flat { title, summary } and nested { data: { title, summary } }
+      payload = parsed?.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+        ? parsed.data
+        : parsed
+    } catch {
+      // Fall back to form-encoded
       try {
-        const parsed = JSON.parse(rawBody)
-        payload = parsed?.data && typeof parsed.data === 'object' ? parsed.data : parsed
-        console.log('[Meeting Ingest] Parsed raw body keys:', Object.keys(payload))
+        const params = new URLSearchParams(rawBody)
+        params.forEach((v, k) => { payload[k] = v })
       } catch {
-        // try form-encoded
-        try {
-          const params = new URLSearchParams(rawBody)
-          params.forEach((v, k) => { payload[k] = v })
-          console.log('[Meeting Ingest] Parsed form body keys:', Object.keys(payload))
-        } catch {
-          console.error('[Meeting Ingest] Could not parse body. Raw (first 200):', rawBody.slice(0, 200))
-        }
+        console.error('[Meeting Ingest] Unparseable body (first 300):', rawBody.slice(0, 300))
       }
-    } else if (req.body && Object.keys(req.body).length > 0) {
-      payload = req.body?.data && typeof req.body.data === 'object' ? req.body.data : req.body
-      console.log('[Meeting Ingest] Using pre-parsed req.body keys:', Object.keys(payload))
-    } else {
-      console.error('[Meeting Ingest] No body received at all')
     }
 
-    const title = payload.title
-    const date = payload.date
-    const duration = payload.duration
-    const attendees = payload.attendees
-    const summary = payload.summary
-    const action_items = payload.action_items
-    const transcript = payload.transcript
+    console.log('[Meeting Ingest] Payload keys:', Object.keys(payload))
+
+    const title: string | undefined = payload.title
+    const date: string | undefined = payload.date
+    const duration: string | number | undefined = payload.duration
+    const attendees: string | undefined = payload.attendees
+    const summary: string | undefined = payload.summary
+    const action_items: string | undefined = payload.action_items
+    const transcript: string | undefined = payload.transcript
 
     if (!title) {
-      console.error('[Meeting Ingest] No title. Payload keys:', Object.keys(payload), '| rawBody length:', rawBody.length)
       res.status(400).json({ error: 'Missing required field: title', received_keys: Object.keys(payload), raw_length: rawBody.length })
       return
     }
