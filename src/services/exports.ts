@@ -13,7 +13,7 @@ import {
   BorderStyle,
 } from 'docx'
 import PDFDocument from 'pdfkit'
-import type { MeetingIntelligence } from './meeting-intel.js'
+import type { MeetingIntelligence, TearraCommitment } from './meeting-intel.js'
 
 // ── Brand ─────────────────────────────────────────────────────────────────────
 
@@ -140,7 +140,8 @@ export async function generateInternalPdf(
   intel: MeetingIntelligence,
   businessLens: string,
   fathomSummary: string | null,
-  fathomActionItems: string | null
+  fathomActionItems: string | null,
+  tearraCommitments?: TearraCommitment[]
 ): Promise<string> {
   const buffer = await buildPdf((doc) => {
     pdfPageHeader(doc, 'Meeting Intelligence Report — Internal', title, date, attendees, intel.overview.meeting_type_label)
@@ -223,6 +224,21 @@ export async function generateInternalPdf(
             indent: 12,
             paragraphGap: 5,
           })
+      }
+      doc.moveDown(0.3)
+    }
+
+    // My Commitments
+    if (tearraCommitments && tearraCommitments.length > 0) {
+      pdfSection(doc, 'My Commitments')
+      for (const c of tearraCommitments) {
+        const label = `[${c.urgency.replace(/_/g, ' ').toUpperCase()}]`
+        doc.fontSize(10).fillColor('#111111').font('Helvetica-Bold').text(`${label}  ${c.commitment}`, { indent: 12 })
+        if (c.deadline) {
+          doc.fontSize(9).fillColor('#555555').font('Helvetica').text(`Due: ${c.deadline}`, { indent: 12, paragraphGap: 5 })
+        } else {
+          doc.moveDown(0.3)
+        }
       }
       doc.moveDown(0.3)
     }
@@ -477,7 +493,8 @@ export async function generateInternalDocx(
   intel: MeetingIntelligence,
   businessLens: string,
   fathomSummary: string | null,
-  fathomActionItems: string | null
+  fathomActionItems: string | null,
+  tearraCommitments?: TearraCommitment[]
 ): Promise<string> {
   const children: (Paragraph | Table)[] = [
     ...docxHeader('Meeting Intelligence Report — Internal', title, date, attendees, intel.overview.meeting_type_label),
@@ -535,6 +552,23 @@ export async function generateInternalDocx(
     for (const fu of intel.follow_up_required) {
       children.push(new Paragraph({ children: [new TextRun({ text: fu.action, bold: true, size: 20 })], spacing: { after: 40 } }))
       children.push(docxBody(`For: ${fu.recipient}  ·  ${fu.urgency.replace(/_/g, ' ').toUpperCase()}`))
+    }
+  }
+
+  if (tearraCommitments && tearraCommitments.length > 0) {
+    children.push(docxHeading('My Commitments'))
+    for (const c of tearraCommitments) {
+      const label = `[${c.urgency.replace(/_/g, ' ').toUpperCase()}]`
+      children.push(new Paragraph({
+        children: [
+          new TextRun({ text: `${label}  `, bold: true, color: c.urgency === 'immediate' ? 'EF4444' : GOLD_HEX, size: 18 }),
+          new TextRun({ text: c.commitment, bold: true, size: 20 }),
+        ],
+        spacing: { after: 40 },
+      }))
+      if (c.deadline) {
+        children.push(docxBody(`Due: ${c.deadline}`))
+      }
     }
   }
 

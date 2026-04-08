@@ -71,6 +71,7 @@ async function processMeeting(meetingId: string, data: MeetingData): Promise<voi
       .update({
         meeting_type: intel.overview.meeting_type,
         meeting_intelligence: intel,
+        tearra_commitments: intel.tearra_commitments ?? [],
         business_lens: businessLens,
         updated_at: new Date().toISOString(),
       })
@@ -89,8 +90,8 @@ async function processMeeting(meetingId: string, data: MeetingData): Promise<voi
 
     try {
       ;[internalPdf, internalDocx, clientPdf, clientDocx] = await Promise.all([
-        generateInternalPdf(meetingId, data.title, dateStr, attendeesStr, intel, businessLens, data.summary ?? null, data.action_items ?? null),
-        generateInternalDocx(meetingId, data.title, dateStr, attendeesStr, intel, businessLens, data.summary ?? null, data.action_items ?? null),
+        generateInternalPdf(meetingId, data.title, dateStr, attendeesStr, intel, businessLens, data.summary ?? null, data.action_items ?? null, intel.tearra_commitments),
+        generateInternalDocx(meetingId, data.title, dateStr, attendeesStr, intel, businessLens, data.summary ?? null, data.action_items ?? null, intel.tearra_commitments),
         generateClientPdf(meetingId, data.title, dateStr, attendeesStr, intel),
         generateClientDocx(meetingId, data.title, dateStr, attendeesStr, intel),
       ])

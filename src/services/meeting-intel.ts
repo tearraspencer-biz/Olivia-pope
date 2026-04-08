@@ -22,6 +22,12 @@ export interface MeetingFollowUp {
   urgency: 'immediate' | 'this_week' | 'this_month'
 }
 
+export interface TearraCommitment {
+  commitment: string
+  deadline: string | null
+  urgency: 'immediate' | 'this_week' | 'this_month'
+}
+
 export interface MeetingIntelligence {
   overview: {
     meeting_type: string
@@ -45,6 +51,7 @@ export interface MeetingIntelligence {
   }
   ideas_and_opportunities: string[]
   follow_up_required: MeetingFollowUp[]
+  tearra_commitments: TearraCommitment[]
   meeting_outcome: {
     successful: boolean
     moved_forward: string[]
@@ -167,13 +174,27 @@ Use this exact structure:
       "urgency": "immediate, this_week, or this_month"
     }
   ],
+  "tearra_commitments": [
+    {
+      "commitment": "Specific thing Tearra personally agreed to do or was assigned in this meeting",
+      "deadline": "Exact deadline mentioned or implied, or null if none stated",
+      "urgency": "immediate, this_week, or this_month based on context"
+    }
+  ],
   "meeting_outcome": {
     "successful": true,
     "moved_forward": ["What specifically advanced or was accomplished"],
     "unresolved": ["What is still open, unclear, or unresolved"],
     "overall_assessment": "2 to 3 sentences. Honest assessment of how this meeting went, what it means for the relationship or project, and what the most important thing to do next is."
   }
-}`
+}
+
+Rules for tearra_commitments:
+- Only include commitments that belong to Tearra specifically — not other attendees
+- Extract from direct assignments, agreements, and mandates directed at Tearra
+- If Tearra said "I will" or was told "you need to" — it belongs here
+- Order by urgency: immediate first, then this_week, then this_month
+- If no commitments were made by Tearra: return an empty array []`
 
   const response = await anthropic.messages.create({
     model: MODEL,
