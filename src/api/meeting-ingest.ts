@@ -1,5 +1,5 @@
 import type { Router, Request, Response } from 'express'
-import { Router as createRouter, raw as expressRaw } from 'express'
+import { Router as createRouter } from 'express'
 import { createClient } from '@supabase/supabase-js'
 import {
   classifyAndStructureMeeting,
@@ -131,8 +131,7 @@ async function processMeeting(meetingId: string, data: MeetingData): Promise<voi
 export function createMeetingIngestRouter(): Router {
   const router = createRouter()
 
-  // expressRaw captures the body as a Buffer BEFORE any other middleware touches the stream
-  router.post('/api/meeting-ingest', expressRaw({ type: '*/*', limit: '10mb' }), async (req: Request, res: Response) => {
+  router.post('/api/meeting-ingest', async (req: Request, res: Response) => {
     // Validate API key
     const apiKey = req.headers['x-api-key']
     if (!OLIVIA_API_KEY || apiKey !== OLIVIA_API_KEY) {
@@ -140,28 +139,15 @@ export function createMeetingIngestRouter(): Router {
       return
     }
 
-    // req.body is a Buffer when using expressRaw
-    const rawBody = Buffer.isBuffer(req.body) ? req.body.toString('utf-8') : String(req.body ?? '')
-    console.log('[Meeting Ingest] Content-Type:', req.headers['content-type'], '| raw length:', rawBody.length)
+    // express.json() (app-level) already parsed the body
+    const raw = req.body ?? {}
+    // Handle both flat { title, summary } and nested { data: { title, summary } }
+    const payload: Record<string, any> =
+      raw?.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
+        ? raw.data
+        : raw
 
-    let payload: Record<string, any> = {}
-    try {
-      const parsed = JSON.parse(rawBody)
-      // Handle both flat { title, summary } and nested { data: { title, summary } }
-      payload = parsed?.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
-        ? parsed.data
-        : parsed
-    } catch {
-      // Fall back to form-encoded
-      try {
-        const params = new URLSearchParams(rawBody)
-        params.forEach((v, k) => { payload[k] = v })
-      } catch {
-        console.error('[Meeting Ingest] Unparseable body (first 300):', rawBody.slice(0, 300))
-      }
-    }
-
-    console.log('[Meeting Ingest] Payload keys:', Object.keys(payload))
+    console.log('[Meeting Ingest] Content-Type:', req.headers['content-type'], '| payload keys:', Object.keys(payload))
 
     const title: string | undefined = payload.title
     const date: string | undefined = payload.date
@@ -172,7 +158,7 @@ export function createMeetingIngestRouter(): Router {
     const transcript: string | undefined = payload.transcript
 
     if (!title) {
-      res.status(400).json({ error: 'Missing required field: title', received_keys: Object.keys(payload), raw_length: rawBody.length })
+      res.status(400).json({ error: 'Missing required field: title', received_keys: Object.keys(payload) })
       return
     }
 
