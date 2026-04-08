@@ -139,7 +139,14 @@ export function createMeetingIngestRouter(): Router {
       return
     }
 
-    const { title, date, duration, attendees, summary, action_items, transcript } = req.body as {
+    // Log raw body for debugging
+    console.log('[Meeting Ingest] Raw body keys:', Object.keys(req.body ?? {}))
+    console.log('[Meeting Ingest] Content-Type:', req.headers['content-type'])
+
+    // Zapier sometimes nests data under a "data" key — handle both shapes
+    const payload = (req.body?.data && typeof req.body.data === 'object') ? req.body.data : req.body
+
+    const { title, date, duration, attendees, summary, action_items, transcript } = payload as {
       title?: string
       date?: string
       duration?: string | number
@@ -152,7 +159,12 @@ export function createMeetingIngestRouter(): Router {
     // Accept summary as fallback when no raw transcript — Fathom Zapier provides AI summary only
     const primaryContent = transcript || summary
     if (!title || !primaryContent) {
-      res.status(400).json({ error: 'Missing required fields: title and either transcript or summary' })
+      console.error('[Meeting Ingest] Validation failed — title:', title, '| summary length:', summary?.length, '| transcript length:', transcript?.length)
+      res.status(400).json({
+        error: 'Missing required fields: title and either transcript or summary',
+        received_keys: Object.keys(req.body ?? {}),
+        title_value: title ?? null,
+      })
       return
     }
 
