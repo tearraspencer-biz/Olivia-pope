@@ -139,26 +139,51 @@ export function createMeetingIngestRouter(): Router {
       return
     }
 
-    // Log raw body for debugging
-    console.log('[Meeting Ingest] Raw body keys:', Object.keys(req.body ?? {}))
-    console.log('[Meeting Ingest] Content-Type:', req.headers['content-type'])
+    const contentType = req.headers['content-type'] ?? ''
+    console.log('[Meeting Ingest] Content-Type:', contentType, '| body keys:', Object.keys(req.body ?? {}))
 
-    // Zapier sometimes nests data under a "data" key — handle both shapes
-    const payload = (req.body?.data && typeof req.body.data === 'object') ? req.body.data : req.body
+    // Read raw body manually — bypasses express middleware edge cases with large payloads
+    let rawBody = ''
+    await new Promise<void>((resolve) => {
+      req.on('data', (chunk: Buffer) => { rawBody += chunk.toString() })
+      req.on('end', resolve)
+    })
 
-    const { title, date, duration, attendees, summary, action_items, transcript } = payload as {
-      title?: string
-      date?: string
-      duration?: string | number
-      attendees?: string
-      summary?: string
-      action_items?: string
-      transcript?: string
+    // Try JSON parse of raw body first, then fall back to already-parsed req.body
+    let payload: Record<string, string> = {}
+    if (rawBody) {
+      try {
+        const parsed = JSON.parse(rawBody)
+        payload = parsed?.data && typeof parsed.data === 'object' ? parsed.data : parsed
+        console.log('[Meeting Ingest] Parsed raw body keys:', Object.keys(payload))
+      } catch {
+        // try form-encoded
+        try {
+          const params = new URLSearchParams(rawBody)
+          params.forEach((v, k) => { payload[k] = v })
+          console.log('[Meeting Ingest] Parsed form body keys:', Object.keys(payload))
+        } catch {
+          console.error('[Meeting Ingest] Could not parse body. Raw (first 200):', rawBody.slice(0, 200))
+        }
+      }
+    } else if (req.body && Object.keys(req.body).length > 0) {
+      payload = req.body?.data && typeof req.body.data === 'object' ? req.body.data : req.body
+      console.log('[Meeting Ingest] Using pre-parsed req.body keys:', Object.keys(payload))
+    } else {
+      console.error('[Meeting Ingest] No body received at all')
     }
 
+    const title = payload.title
+    const date = payload.date
+    const duration = payload.duration
+    const attendees = payload.attendees
+    const summary = payload.summary
+    const action_items = payload.action_items
+    const transcript = payload.transcript
+
     if (!title) {
-      console.error('[Meeting Ingest] No title received. Keys:', Object.keys(payload ?? {}))
-      res.status(400).json({ error: 'Missing required field: title', received_keys: Object.keys(payload ?? {}) })
+      console.error('[Meeting Ingest] No title. Payload keys:', Object.keys(payload), '| rawBody length:', rawBody.length)
+      res.status(400).json({ error: 'Missing required field: title', received_keys: Object.keys(payload), raw_length: rawBody.length })
       return
     }
 
