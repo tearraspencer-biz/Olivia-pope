@@ -156,19 +156,18 @@ export function createMeetingIngestRouter(): Router {
       transcript?: string
     }
 
-    // Accept summary as fallback when no raw transcript — Fathom Zapier provides AI summary only
-    const primaryContent = transcript || summary
-    if (!title || !primaryContent) {
-      console.error('[Meeting Ingest] Validation failed — title:', title, '| summary length:', summary?.length, '| transcript length:', transcript?.length)
-      res.status(400).json({
-        error: 'Missing required fields: title and either transcript or summary',
-        received_keys: Object.keys(req.body ?? {}),
-        title_value: title ?? null,
-      })
+    if (!title) {
+      console.error('[Meeting Ingest] No title received. Keys:', Object.keys(payload ?? {}))
+      res.status(400).json({ error: 'Missing required field: title', received_keys: Object.keys(payload ?? {}) })
       return
     }
 
-    // Insert meeting record with pending status
+    // Use whatever content is available — transcript preferred, summary as fallback
+    const primaryContent = transcript || summary || null
+
+    console.log(`[Meeting Ingest] Received — title: "${title}" | summary: ${summary?.length ?? 0} chars | transcript: ${transcript?.length ?? 0} chars`)
+
+    // Insert meeting record — allow empty content (will be marked failed if nothing to process)
     const { data: meeting, error: insertError } = await supabase
       .from('meetings')
       .insert({
@@ -178,8 +177,8 @@ export function createMeetingIngestRouter(): Router {
         attendees: attendees ?? null,
         fathom_summary: summary ?? null,
         fathom_action_items: action_items ?? null,
-        full_transcript: primaryContent, // raw transcript if provided, AI summary as fallback
-        processing_status: 'pending',
+        full_transcript: primaryContent,
+        processing_status: primaryContent ? 'pending' : 'failed',
       })
       .select('id')
       .single()
@@ -193,17 +192,21 @@ export function createMeetingIngestRouter(): Router {
     // Acknowledge immediately
     res.status(202).json({ message: 'Meeting received — processing', meetingId: meeting.id })
 
-    // Process asynchronously — use raw transcript if provided, AI summary as fallback
-    const meetingData: MeetingData = {
-      title,
-      date,
-      duration,
-      attendees,
-      summary,
-      action_items,
-      transcript: primaryContent,
+    // Process asynchronously only if we have content to analyze
+    if (primaryContent) {
+      const meetingData: MeetingData = {
+        title,
+        date,
+        duration,
+        attendees,
+        summary,
+        action_items,
+        transcript: primaryContent,
+      }
+      processMeeting(meeting.id as string, meetingData)
+    } else {
+      console.warn(`[Meeting Ingest] ${meeting.id}: No transcript or summary — stored without processing`)
     }
-    processMeeting(meeting.id as string, meetingData)
   })
 
   return router
