@@ -13,6 +13,7 @@ import {
   generateInternalDocx,
   generateClientDocx,
 } from '../services/exports.js'
+import { extractKnowledge, saveKnowledge } from '../services/knowledge.js'
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -77,7 +78,21 @@ async function processMeeting(meetingId: string, data: MeetingData): Promise<voi
       })
       .eq('id', meetingId)
 
-    // Step 4: Generate export documents
+    // Step 4: Extract reusable teaching material into the knowledge library.
+    // Deliberately non-fatal, like exports below: most meetings contain no
+    // teaching, and a failure here must not discard the intelligence and
+    // business lens already written above.
+    let knowledgeError: string | null = null
+    try {
+      const items = await extractKnowledge(data)
+      const saved = await saveKnowledge(meetingId, items)
+      console.log(`[Meeting Ingest] Extracted ${saved} knowledge item(s) for ${meetingId}`)
+    } catch (err: any) {
+      knowledgeError = err?.message ?? 'Knowledge extraction failed'
+      console.error(`[Meeting Ingest] Knowledge extraction failed for ${meetingId}:`, knowledgeError)
+    }
+
+    // Step 5: Generate export documents
     const dateStr = data.date ?? new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     const attendeesStr = data.attendees ?? 'Not recorded'
 
@@ -101,7 +116,7 @@ async function processMeeting(meetingId: string, data: MeetingData): Promise<voi
       // Continue — intelligence is preserved, exports are bonus
     }
 
-    // Step 5: Final update — complete with all data
+    // Step 6: Final update — complete with all data
     await supabase
       .from('meetings')
       .update({
@@ -110,7 +125,14 @@ async function processMeeting(meetingId: string, data: MeetingData): Promise<voi
         export_client_pdf: clientPdf,
         export_client_docx: clientDocx,
         processing_status: 'complete',
-        error_message: exportError ? `Intelligence complete. Export error: ${exportError}` : null,
+        // Both are non-fatal, so surface either without failing the meeting.
+        error_message:
+          [
+            exportError ? `Export error: ${exportError}` : null,
+            knowledgeError ? `Knowledge error: ${knowledgeError}` : null,
+          ]
+            .filter(Boolean)
+            .join(' | ') || null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', meetingId)
