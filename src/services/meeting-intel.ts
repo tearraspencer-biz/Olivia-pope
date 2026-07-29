@@ -72,10 +72,24 @@ export interface MeetingData {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// The old 12,000-word cap was sized when the Zapier zap only ever delivered
+// Fathom's ~5,000-character summary, so it never actually fired. Now that real
+// transcripts arrive, it was silently discarding the majority of every long
+// meeting — 74% of a 47,000-word call, 68% of Coach AIJ Thurs Call — before
+// Claude saw a single word of it.
+//
+// Sonnet 4.6 has a 1M-token context window, so a 47,000-word transcript
+// (~63,000 tokens) fits with enormous room to spare. This limit now exists only
+// as a guard against pathological input, not as a working constraint.
+const MAX_TRANSCRIPT_WORDS = 150_000
+
 function truncateTranscript(text: string): string {
   const words = text.split(/\s+/)
-  if (words.length <= 12000) return text
-  return words.slice(0, 12000).join(' ') + '\n\n[Transcript truncated at 12,000 words for processing. Full transcript stored in database.]'
+  if (words.length <= MAX_TRANSCRIPT_WORDS) return text
+  return (
+    words.slice(0, MAX_TRANSCRIPT_WORDS).join(' ') +
+    `\n\n[Transcript truncated at ${MAX_TRANSCRIPT_WORDS.toLocaleString()} words for processing. Full transcript stored in database.]`
+  )
 }
 
 function extractJson(text: string): string {
@@ -198,13 +212,28 @@ Rules for tearra_commitments:
 
   const response = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 4096,
+    // Raised from 4096. A dense meeting overruns that: the largest successful
+    // run measured ~3,185 output tokens (78% of the old ceiling), and
+    // "B&B (Building & Bonding) AIJ-7/26/26" — 14 action items — exceeded it,
+    // truncating the JSON mid-object so JSON.parse below threw and the whole
+    // meeting was marked failed.
+    max_tokens: 8192,
     messages: [{ role: 'user', content: prompt }],
   })
 
   const textBlock = response.content.find((b) => b.type === 'text')
   if (!textBlock || textBlock.type !== 'text') {
     throw new Error('Meeting structuring returned no output')
+  }
+
+  // A truncated response yields invalid JSON here. Surface that specifically —
+  // the generic catch upstream reports "could not be processed", which sent us
+  // digging through the database to work out what actually went wrong.
+  if (response.stop_reason === 'max_tokens') {
+    throw new Error(
+      `Meeting structuring hit max_tokens (${8192}) and returned truncated JSON. ` +
+        'The meeting is too dense for the current output limit.'
+    )
   }
 
   const jsonText = extractJson(textBlock.text)
