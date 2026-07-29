@@ -14,6 +14,18 @@ const supabase = createClient(
 
 const MODEL = 'claude-sonnet-4-6'
 
+// A 3.5-hour coaching call ("Coach AIJ Thurs Call 7/16/26", ~38,000 words)
+// generated enough material to blow past the original 8,192 ceiling, so the JSON
+// came back truncated and the whole batch was lost.
+//
+// Two controls, because raising the ceiling alone just moves the cliff:
+// MAX_ITEMS bounds how much the model tries to emit, and MAX_OUTPUT_TOKENS
+// leaves generous headroom above that bound. Sonnet 4.6 can emit far more than
+// this, but staying at 16k keeps the request safely non-streaming — larger
+// non-streaming responses risk HTTP timeouts.
+const MAX_OUTPUT_TOKENS = 16384
+const MAX_ITEMS = 25
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type KnowledgeType =
@@ -58,6 +70,51 @@ function extractJson(text: string): string {
   const end = text.lastIndexOf(']')
   if (start !== -1 && end !== -1) return text.slice(start, end + 1)
   return text.trim()
+}
+
+/**
+ * Recover the complete objects from a JSON array that was cut off mid-write.
+ *
+ * Walks back from the end to the last `}` that closes a top-level element, then
+ * closes the array there. Returns null if not even one whole object survived.
+ */
+function salvageTruncatedArray(text: string): unknown[] | null {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let lastComplete = -1
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      escaped = true
+      continue
+    }
+    if (ch === '"') {
+      inString = !inString
+      continue
+    }
+    if (inString) continue
+
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      // depth 0 here means this brace closed a direct element of the array.
+      if (depth === 0) lastComplete = i
+    }
+  }
+
+  if (lastComplete === -1) return null
+  try {
+    return JSON.parse(text.slice(0, lastComplete + 1) + ']')
+  } catch {
+    return null
+  }
 }
 
 function coerceItem(raw: any): KnowledgeItem | null {
@@ -141,11 +198,12 @@ Rules:
 - Skip scheduling, small talk, status updates, and administrative back-and-forth.
 - Skip anything that is purely about one person's specific situation and would not transfer to another member.
 - Prefer fewer, more substantial items over many thin ones. An item that only restates its own title is not worth extracting.
+- Return at most ${MAX_ITEMS} items. A long call can contain more than that; if so, keep the most substantial and skip the rest rather than trying to cover everything thinly.
 - If this meeting contains no teachable material, return exactly: []`
 
   const response = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 8192,
+    max_tokens: MAX_OUTPUT_TOKENS,
     messages: [{ role: 'user', content: prompt }],
   })
 
@@ -154,12 +212,27 @@ Rules:
     throw new Error('Knowledge extraction returned no output')
   }
 
-  if (response.stop_reason === 'max_tokens') {
-    // Partial JSON can't be parsed and half a library is worse than none.
-    throw new Error('Knowledge extraction hit max_tokens and returned truncated JSON')
+  const raw = extractJson(textBlock.text)
+  const truncated = response.stop_reason === 'max_tokens'
+
+  // A truncated response is still mostly valid — it's a complete list of items
+  // followed by one half-written object. Discarding all of them (the original
+  // behaviour) lost 20+ good items to one incomplete one, so salvage instead.
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (err) {
+    if (!truncated) throw err
+    const salvaged = salvageTruncatedArray(raw)
+    if (!salvaged) {
+      throw new Error('Knowledge extraction was truncated and nothing could be salvaged')
+    }
+    console.warn(
+      `[Knowledge] Response truncated at max_tokens; salvaged ${salvaged.length} complete item(s)`
+    )
+    parsed = salvaged
   }
 
-  const parsed = JSON.parse(extractJson(textBlock.text))
   if (!Array.isArray(parsed)) {
     throw new Error('Knowledge extraction did not return an array')
   }
