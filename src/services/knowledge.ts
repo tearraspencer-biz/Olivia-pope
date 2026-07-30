@@ -23,8 +23,15 @@ const MODEL = 'claude-sonnet-4-6'
 // leaves generous headroom above that bound. Sonnet 4.6 can emit far more than
 // this, but staying at 16k keeps the request safely non-streaming — larger
 // non-streaming responses risk HTTP timeouts.
-const MAX_OUTPUT_TOKENS = 16384
-const MAX_ITEMS = 25
+// Raised from 25. A 271-minute call (51,000 words) returned exactly 25 items —
+// hitting the cap precisely, which means the limit was the constraint rather
+// than the material running out.
+const MAX_ITEMS = 40
+
+// Raised from 16,384 to stay ahead of MAX_ITEMS. Observed items run ~450 tokens
+// each as JSON, so 40 items is ~18,000 — the old ceiling would have forced the
+// salvage path on every long call instead of keeping it as a backstop.
+const MAX_OUTPUT_TOKENS = 24576
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -201,11 +208,17 @@ Rules:
 - Return at most ${MAX_ITEMS} items. A long call can contain more than that; if so, keep the most substantial and skip the rest rather than trying to cover everything thinly.
 - If this meeting contains no teachable material, return exactly: []`
 
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: MAX_OUTPUT_TOKENS,
-    messages: [{ role: 'user', content: prompt }],
-  })
+  // Streamed rather than a plain create(): at 24k max_tokens a non-streaming
+  // request can exceed the HTTP timeout on a long call and fail after minutes
+  // of work. Streaming holds the connection open; get_final_message reassembles
+  // the whole response, so nothing downstream changes.
+  const response = await anthropic.messages
+    .stream({
+      model: MODEL,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      messages: [{ role: 'user', content: prompt }],
+    })
+    .finalMessage()
 
   const textBlock = response.content.find((b) => b.type === 'text')
   if (!textBlock || textBlock.type !== 'text') {
