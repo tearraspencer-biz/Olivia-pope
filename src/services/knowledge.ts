@@ -4,7 +4,10 @@ import type { MeetingData } from './meeting-intel.js'
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
-  timeout: 300_000,
+  // 10 minutes. A 51,000-word transcript generating up to 24k output tokens
+  // exceeded the previous 5-minute ceiling and failed with "Request timed out"
+  // after several minutes of work.
+  timeout: 600_000,
 })
 
 const supabase = createClient(
@@ -208,20 +211,26 @@ Rules:
 - Return at most ${MAX_ITEMS} items. A long call can contain more than that; if so, keep the most substantial and skip the rest rather than trying to cover everything thinly.
 - If this meeting contains no teachable material, return exactly: []`
 
-  // Non-streaming, reverted from .stream().finalMessage().
+  // Streamed. This was added, reverted, and restored — the history is worth
+  // recording so it isn't reverted a third time.
   //
-  // Streaming was added pre-emptively to avoid an HTTP timeout at 24k
-  // max_tokens, but that timeout had never actually occurred — and streaming
-  // broke a path that worked: the 271-minute July 24 call went from 25 items to
-  // "Unexpected end of JSON input" with nothing else changed downstream. The
-  // client above already sets an explicit 300s timeout, which is what actually
-  // governs here, so the risk streaming was guarding against was hypothetical
-  // while the breakage was real.
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: MAX_OUTPUT_TOKENS,
-    messages: [{ role: 'user', content: prompt }],
-  })
+  // Three runs of the same 271-minute call:
+  //   non-streaming, 16384 max_tokens, first-text-block only  -> 25 items
+  //   streaming,     24576,            first-text-block only  -> "Unexpected end of JSON input"
+  //   non-streaming, 24576,            all text blocks        -> "Request timed out"
+  //
+  // The second failure was misattributed to streaming and it was reverted; the
+  // third proved the timeout is real at this size, not hypothetical. Both
+  // changes are needed and they fix different faults: streaming keeps the
+  // connection alive for a long generation, and reading every text block
+  // handles the multi-block response that streaming produces.
+  const response = await anthropic.messages
+    .stream({
+      model: MODEL,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      messages: [{ role: 'user', content: prompt }],
+    })
+    .finalMessage()
 
   // Concatenate every text block rather than taking the first.
   //
