@@ -179,6 +179,11 @@ export function createMeetingIngestRouter(): Router {
     const summary: string | undefined = payload.summary
     const action_items: string | undefined = payload.action_items
     const transcript: string | undefined = payload.transcript
+    // Fathom's immutable recording ID. Stored so dedupe can key on it instead of
+    // the title — a renamed call would otherwise look like a brand new meeting
+    // and be reprocessed. Uniquely indexed, so the database refuses duplicates
+    // even if the caller's own dedupe fails.
+    const recording_id: string | number | undefined = payload.recording_id
 
     if (!title) {
       res.status(400).json({ error: 'Missing required field: title', received_keys: Object.keys(payload) })
@@ -202,9 +207,19 @@ export function createMeetingIngestRouter(): Router {
         fathom_action_items: action_items ?? null,
         full_transcript: primaryContent,
         processing_status: primaryContent ? 'pending' : 'failed',
+        fathom_recording_id: recording_id != null ? String(recording_id) : null,
       })
       .select('id')
       .single()
+
+    // 23505 = unique_violation. The recording is already stored, which is the
+    // unique index doing its job — not an error. Answering 200 keeps the caller
+    // from treating a correctly-prevented duplicate as a failure and retrying.
+    if (insertError?.code === '23505') {
+      console.log(`[Meeting Ingest] Already ingested (recording ${recording_id}) — skipping "${title}"`)
+      res.status(200).json({ message: 'Already ingested — skipped', duplicate: true })
+      return
+    }
 
     if (insertError || !meeting) {
       console.error('[Meeting Ingest] Insert failed:', insertError?.message, insertError?.details, insertError?.hint)

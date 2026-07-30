@@ -208,24 +208,41 @@ Rules:
 - Return at most ${MAX_ITEMS} items. A long call can contain more than that; if so, keep the most substantial and skip the rest rather than trying to cover everything thinly.
 - If this meeting contains no teachable material, return exactly: []`
 
-  // Streamed rather than a plain create(): at 24k max_tokens a non-streaming
-  // request can exceed the HTTP timeout on a long call and fail after minutes
-  // of work. Streaming holds the connection open; get_final_message reassembles
-  // the whole response, so nothing downstream changes.
-  const response = await anthropic.messages
-    .stream({
-      model: MODEL,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      messages: [{ role: 'user', content: prompt }],
-    })
-    .finalMessage()
+  // Non-streaming, reverted from .stream().finalMessage().
+  //
+  // Streaming was added pre-emptively to avoid an HTTP timeout at 24k
+  // max_tokens, but that timeout had never actually occurred — and streaming
+  // broke a path that worked: the 271-minute July 24 call went from 25 items to
+  // "Unexpected end of JSON input" with nothing else changed downstream. The
+  // client above already sets an explicit 300s timeout, which is what actually
+  // governs here, so the risk streaming was guarding against was hypothetical
+  // while the breakage was real.
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    messages: [{ role: 'user', content: prompt }],
+  })
 
-  const textBlock = response.content.find((b) => b.type === 'text')
-  if (!textBlock || textBlock.type !== 'text') {
-    throw new Error('Knowledge extraction returned no output')
+  // Concatenate every text block rather than taking the first.
+  //
+  // .find() returned only the leading block, so a response split across blocks
+  // — or one with an empty block first — yielded '' and JSON.parse('') threw
+  // "Unexpected end of JSON input". That was a latent bug independent of
+  // streaming; streaming just made it fire.
+  const text = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+
+  if (!text.trim()) {
+    // Name the failure instead of letting an empty string reach JSON.parse.
+    throw new Error(
+      `Knowledge extraction returned no text (stop_reason: ${response.stop_reason}, ` +
+        `blocks: ${response.content.map((b) => b.type).join(',') || 'none'})`
+    )
   }
 
-  const raw = extractJson(textBlock.text)
+  const raw = extractJson(text)
   const truncated = response.stop_reason === 'max_tokens'
 
   // A truncated response is still mostly valid — it's a complete list of items
