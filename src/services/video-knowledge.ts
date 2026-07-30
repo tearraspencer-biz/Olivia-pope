@@ -14,7 +14,12 @@ const supabase = createClient(
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_OUTPUT_TOKENS = 24576
-const MAX_ITEMS = 40
+// A ceiling, not a target. The first real run produced 26 items from one talk
+// with a median content length of 664 characters — roughly half the depth of the
+// meeting extractor's output. Splitting finely makes each lesson shallow, so the
+// prompt below now pushes toward merging related points into fewer, fuller ones.
+const MAX_ITEMS = 25
+const TARGET_ITEMS = '8 to 18'
 const MAX_TRANSCRIPT_WORDS = 150_000
 
 export interface VideoData {
@@ -120,7 +125,7 @@ Return ONLY a JSON object:
       "title": "Short, specific name for one thing this video teaches. Say what it claims, not the topic. Bad: 'n8n workflows'. Good: 'Why you should split a long n8n workflow into sub-workflows before it hits 40 nodes'.",
       "knowledge_type": "One of: concept, explanation, worked_example, framework, faq, pitfall, tool_tip",
       "summary": "One sentence Tearra can scan in a list to decide whether to read the full item.",
-      "content": "The actual teaching, in markdown. Write it as instruction to someone who has NOT seen the video — never 'as the video explains' or 'he mentions'. Include the reasoning and any specific numbers, settings, tool names, or steps given. 2 to 6 paragraphs, or a list where a list is genuinely clearer.",
+      "content": "The actual teaching, in markdown, written as instruction to someone who has NOT seen the video — never 'as the video explains' or 'he mentions'. This is the field that matters; the summary above is only a label for it. It must stand alone as something Tearra could teach from without rewatching, which means covering, where the video provides them: WHAT the thing is, WHY it works or matters, HOW to actually do it step by step, the SPECIFICS given (exact numbers, timeframes, prices, tool names, settings, phrasings), any EXAMPLE the speaker used, and what to avoid. Aim for 250 to 500 words. If you cannot write at least 150 words of real substance about an item, it is too granular — merge it into a related item rather than shipping a thin one.",
       "source_quote": "The most relevant verbatim line or two from the transcript, so the claim can be checked before it is taught onward. null if no single line captures it.",
       "source_timestamp": "The timestamp on that line if the transcript has them, as HH:MM:SS or MM:SS. null if the transcript has no timestamps.",
       "speaker": "Who said it, if the transcript names speakers. null otherwise.",
@@ -134,8 +139,10 @@ Rules:
 - Keep specifics. A tool version, a pricing number, a setting name, an exact prompt — those are the parts worth having and the first thing lost in a summary.
 - Skip intros, sponsor reads, subscribe requests, and self-promotion.
 - Skip anything that only makes sense with the video's visuals and cannot be written down.
-- Prefer fewer substantial items over many thin ones. An item that only restates its own title is not worth extracting.
-- Return at most ${MAX_ITEMS} items. If the video contains more, keep the most substantial.
+- Depth beats coverage. ${TARGET_ITEMS} substantial items is the target for a typical talk; ${MAX_ITEMS} is the hard ceiling. Twenty-six one-paragraph items is a worse result than twelve that actually teach.
+- Merge aggressively. If several points belong to one framework, phase, or method, make them ONE item that covers the whole thing with its steps — not one item per step. A four-phase framework is usually one item per phase at most, plus the framework itself.
+- Never let content just restate the summary in more words. If they say the same thing, the item is not finished.
+- Keep the speaker's own examples, analogies, and exact phrasing where they carry the point. Those are the first casualty of summarising and the reason to watch a specific person rather than read a generic article.
 - If the video teaches nothing transferable, return an empty items array with an overview saying so.`
 
   // Streamed: a long video at 24k max_tokens exceeds a non-streaming request's
