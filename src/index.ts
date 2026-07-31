@@ -6,6 +6,7 @@ import { runDailyBrief } from './daily-brief.js'
 import { createResearchRequestRouter } from './api/research-request.js'
 import { createMeetingIngestRouter } from './api/meeting-ingest.js'
 import { createVideoIngestRouter } from './api/video-ingest.js'
+import { createExtractRouter } from './api/extract.js'
 
 const app = express()
 
@@ -45,6 +46,9 @@ app.use(createMeetingIngestRouter())
 // YouTube video lesson extraction (transcript pasted by hand — YouTube blocks
 // automated caption fetching)
 app.use(createVideoIngestRouter())
+
+// On-demand lesson extraction against an already-stored transcript
+app.use(createExtractRouter())
 
 const PORT = Number(process.env.PORT) || 3000
 app.listen(PORT, () => console.log(`Server on port ${PORT}`))
