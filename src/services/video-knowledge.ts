@@ -44,34 +44,40 @@ function truncate(text: string): string {
   return words.slice(0, MAX_TRANSCRIPT_WORDS).join(' ') + '\n\n[Transcript truncated for processing.]'
 }
 
-function extractJson(text: string): string {
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/)
-  if (fence) return fence[1].trim()
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start !== -1 && end !== -1) return text.slice(start, end + 1)
-  return text.trim()
-}
-
 /**
- * Recover complete objects from an array cut off mid-write. Tracks string state
- * and escapes because content values routinely contain braces and quotes.
+ * The shape Claude fills in, enforced by forcing a tool call rather than asking
+ * for JSON in prose. Free-text JSON failed on a long sermon when a quote with
+ * its own quotation marks went unescaped ("Unexpected token I in JSON at
+ * position 31068") and the whole video was lost. Tool input is produced by the
+ * API as structured data, so there is no hand-written JSON to break.
  */
-function salvageArray(text: string): unknown[] | null {
-  let depth = 0, inString = false, escaped = false, lastComplete = -1
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (escaped) { escaped = false; continue }
-    if (ch === '\\') { escaped = true; continue }
-    if (ch === '"') { inString = !inString; continue }
-    if (inString) continue
-    if (ch === '{') depth++
-    else if (ch === '}') { depth--; if (depth === 0) lastComplete = i }
-  }
-  if (lastComplete === -1) return null
-  try {
-    return JSON.parse(text.slice(0, lastComplete + 1) + ']')
-  } catch { return null }
+const RECORD_TOOL: Anthropic.Tool = {
+  name: 'record_video_lessons',
+  description: 'Record the overview and the lessons extracted from the video.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      overview: { type: 'string' },
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            knowledge_type: { type: 'string', enum: [...VALID_TYPES] },
+            summary: { type: 'string' },
+            content: { type: 'string' },
+            source_quote: { type: ['string', 'null'] },
+            source_timestamp: { type: ['string', 'null'] },
+            speaker: { type: ['string', 'null'] },
+            tags: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['title', 'knowledge_type', 'summary', 'content'],
+        },
+      },
+    },
+    required: ['overview', 'items'],
+  },
 }
 
 function coerceItem(raw: any): KnowledgeItem | null {
@@ -116,7 +122,7 @@ URL: ${video.url}
 TRANSCRIPT:
 ${truncate(video.transcript)}
 
-Return ONLY a JSON object:
+Call record_video_lessons. What each field must contain:
 
 {
   "overview": "3 to 5 sentences. What this video is actually about, what it teaches, and who it is useful for. Written for Tearra deciding whether to spend time on the full video.",
@@ -151,44 +157,32 @@ Rules:
     .stream({
       model: MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
+      tools: [RECORD_TOOL],
+      tool_choice: { type: 'tool', name: RECORD_TOOL.name },
       messages: [{ role: 'user', content: prompt }],
     })
     .finalMessage()
 
-  // Every text block, not just the first — a streamed response can arrive split,
-  // and taking only block one yields an empty string.
-  const text = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('')
-
-  if (!text.trim()) {
+  const call = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
+  if (!call) {
     throw new Error(
-      `Video extraction returned no text (stop_reason: ${response.stop_reason}, ` +
+      `Video extraction returned no lessons (stop_reason: ${response.stop_reason}, ` +
         `blocks: ${response.content.map((b) => b.type).join(',') || 'none'})`
     )
   }
+  const parsed = call.input as any
+  const rawItems: unknown[] = Array.isArray(parsed?.items) ? parsed.items : []
 
-  const raw = extractJson(text)
-  let parsed: any
-  try {
-    parsed = JSON.parse(raw)
-  } catch (err) {
-    // Salvage the items array from a response cut off mid-object rather than
-    // discarding every complete item alongside the incomplete one.
-    const itemsStart = raw.indexOf('"items"')
-    const arrayStart = itemsStart === -1 ? -1 : raw.indexOf('[', itemsStart)
-    const salvaged = arrayStart === -1 ? null : salvageArray(raw.slice(arrayStart))
-    if (!salvaged) throw err
-    console.warn(`[Video] Response truncated; salvaged ${salvaged.length} item(s)`)
-    parsed = { overview: '', items: salvaged }
+  // Cut off at max_tokens, the stream still yields every item written so far,
+  // but the last one stops mid-sentence. Drop it rather than save half a lesson.
+  if (response.stop_reason === 'max_tokens' && rawItems.length > 0) {
+    rawItems.pop()
+    console.warn(`[Video] Response truncated; kept ${rawItems.length} complete item(s)`)
   }
 
   return {
     overview: typeof parsed?.overview === 'string' ? parsed.overview.trim() : '',
-    items: Array.isArray(parsed?.items)
-      ? parsed.items.map(coerceItem).filter((i: KnowledgeItem | null): i is KnowledgeItem => i !== null)
-      : [],
+    items: rawItems.map(coerceItem).filter((i): i is KnowledgeItem => i !== null),
   }
 }
 
