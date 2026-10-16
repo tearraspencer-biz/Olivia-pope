@@ -58,9 +58,9 @@ test('drafts naming a retrieved participant are blocked before any save',async()
   await assert.rejects(tools.save({request_id:'request',engine_id:'engine',platform:'Facebook',title:'A thought',copy:'Private Participant told me this.',source_ids:[documentId]}),/identifying/);assert.equal(saved,false);
 });
 
-test('real MCP HTTP initialization and tools/list enforce OAuth, origin and host checks',async()=>{
-  const app=express();let remoteCalls=0;
-  app.use(createMcpRouter(config,verify,async(url)=>{remoteCalls++;assert.equal(url,config.issuer+'/user');return json({id:owner})}));
+test('resource-bound OAuth supports real MCP discovery using UserInfo, with owner/origin/host isolation',async()=>{
+  const app=express();let remoteCalls=0;let userInfoOwner=owner;
+  app.use(createMcpRouter(config,verify,async(url)=>{remoteCalls++;assert.equal(url,config.issuer+'/oauth/userinfo');return json({sub:userInfoOwner})}));
   const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
   const base=`http://127.0.0.1:${server.address().port}`;
   const post=(headers,body)=>new Promise((resolve,reject)=>{
@@ -80,5 +80,7 @@ test('real MCP HTTP initialization and tools/list enforce OAuth, origin and host
     const tools=(await list.json()).result.tools;assert.deepEqual(tools.map(t=>t.name),['search','fetch','list_content_engines','save_content_draft']);
     assert.equal(tools.find(t=>t.name==='save_content_draft').annotations.readOnlyHint,false);
     assert.equal(tools.some(t=>/publish|approve|delete/.test(t.name)),false);
+    userInfoOwner='unrelated-owner';
+    assert.equal((await post({Authorization:`Bearer ${token}`},{jsonrpc:'2.0',id:3,method:'tools/list',params:{}})).status,401);
   }finally{await new Promise(resolve=>server.close(resolve));server.closeAllConnections()}
 });

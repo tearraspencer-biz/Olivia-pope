@@ -31,9 +31,12 @@ export function createMcpRouter(config?: McpConfig | null, verify?: (token: stri
       stage = 'jwt_validation'
       await verifier(token)
       stage = 'issuer_user_check'
-      const user = await fetcher(`${config.issuer}/user`, { headers: { apikey: config.publicKey, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) })
+      // /user requires the normal Supabase request audience and rejects our
+      // resource-bound OAuth token. OIDC UserInfo supports this OAuth session
+      // and returns its verified owner as sub, without weakening JWT checks.
+      const user = await fetcher(`${config.issuer}/oauth/userinfo`, { headers: { apikey: config.publicKey, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) })
       issuerStatus = user.status
-      if (!user.ok || (await user.json()).id !== config.ownerId) throw new Error()
+      if (!user.ok || (await user.json()).sub !== config.ownerId) throw new Error()
       const now = Date.now(), window = recent.get(config.ownerId)
       const bucket = !window || now - window.since > 60000 ? { since: now, calls: 0 } : window
       recent.set(config.ownerId, bucket)
