@@ -34,7 +34,9 @@ export function tokenVerifier(config: McpConfig, key?: JWTVerifyGetKey) {
   const jwks = key ?? createRemoteJWKSet(new URL(`${config.issuer}/.well-known/jwks.json`))
   return async (token: string) => {
     const { payload } = await jwtVerify(token, jwks, { issuer: config.issuer, audience: config.resource, algorithms: ['ES256', 'RS256'], requiredClaims: ['exp', 'iat', 'sub'], maxTokenAge: '2h' })
-    if (payload.sub !== config.ownerId || payload.role !== 'content_hq_mcp' || typeof payload.client_id !== 'string' || !config.clientIds.includes(payload.client_id)) throw new Error('Not authorized')
+    if (payload.sub !== config.ownerId) throw new Error('MCP_OWNER_MISMATCH')
+    if (payload.role !== 'content_hq_mcp') throw new Error('MCP_ROLE_MISMATCH')
+    if (typeof payload.client_id !== 'string' || !config.clientIds.includes(payload.client_id)) throw new Error('MCP_CLIENT_MISMATCH')
     // Check revocation/current user with the issuer too, rather than accepting
     // any still-cryptographically-valid token after its account is disabled.
     return payload

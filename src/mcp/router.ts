@@ -24,10 +24,15 @@ export function createMcpRouter(config?: McpConfig | null, verify?: (token: stri
     if (origin) { res.set('Access-Control-Allow-Origin', origin); res.vary('Origin') }
     res.set('Cache-Control', 'no-store')
     const token = /^Bearer ([^\s]+)$/i.exec(req.get('authorization') ?? '')?.[1]
+    let stage = 'bearer_header'
+    let issuerStatus: number | undefined
     try {
       if (!token || token.length > 16000) throw new Error()
+      stage = 'jwt_validation'
       await verifier(token)
+      stage = 'issuer_user_check'
       const user = await fetcher(`${config.issuer}/user`, { headers: { apikey: config.publicKey, Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) })
+      issuerStatus = user.status
       if (!user.ok || (await user.json()).id !== config.ownerId) throw new Error()
       const now = Date.now(), window = recent.get(config.ownerId)
       const bucket = !window || now - window.since > 60000 ? { since: now, calls: 0 } : window
@@ -35,7 +40,13 @@ export function createMcpRouter(config?: McpConfig | null, verify?: (token: stri
       if (++bucket.calls > 60) { res.set('Retry-After', '60').status(429).json({ error: 'Please wait before trying again.' }); return }
       res.locals.mcpToken = token
       next()
-    } catch {
+    } catch (error) {
+      // Never log the token, claims, identity, upstream body or raw message.
+      // Only known diagnostic codes distinguish the failing boundary.
+      const candidate = error && typeof error === 'object' && 'code' in error ? String(error.code) : error instanceof Error ? error.message : ''
+      const code = /^(ERR_JWT_[A-Z_]+|ERR_JWS_[A-Z_]+|ERR_JWKS_[A-Z_]+|ERR_JOSE_[A-Z_]+|MCP_(OWNER|ROLE|CLIENT)_MISMATCH)$/.test(candidate) ? candidate : 'AUTH_CHECK_FAILED'
+      const claim = error && typeof error === 'object' && 'claim' in error && ['aud', 'iss', 'exp', 'iat', 'sub'].includes(String(error.claim)) ? String(error.claim) : undefined
+      if (token) console.warn('MCP authorization rejected', { stage, code, claim, issuerStatus })
       const metadataUrl = `${new URL(config.resource).origin}/.well-known/oauth-protected-resource/mcp`
       res.set('WWW-Authenticate', `Bearer resource_metadata="${metadataUrl}", scope="openid"`).status(401).json({ error: 'Connect your authorized Content HQ account.' })
     }
