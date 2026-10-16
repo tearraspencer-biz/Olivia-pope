@@ -53,6 +53,26 @@ test('video drafts require the existing Video Studio package format',async()=>{
   const video={videoHook:'Start here',spokenScript:'A useful script.',teleprompter:'A useful script.',keyPoint:'A point',cta:'Save this',caption:'A caption',talkingPoints:['A point'],onScreenText:[],bRoll:[],platforms:['Facebook']};
   assert.equal((await tools.save({...args,copy:JSON.stringify(video)})).approval_state,'Draft');assert.equal(writes,1);
 });
+test('post dates and engagement instructions travel with the same draft and image absence is explicit',async()=>{
+  const details={planned_date:'2026-10-17',first_comment:'Follow-up comment',first_comment_timing:'Two hours later',reply_guidance:[{when:'They ask',reply:'Explain clearly'}],dm_guidance:'Ask what they need',remarks:'Review the source'};
+  let saved;
+  const tools=mcpTools(config,'owner-token',async(url,init)=>{
+    saved=JSON.parse(init.body);assert.equal(init.headers.Authorization,'Bearer owner-token');
+    return json({record_id:'same-record',version_id:'new-version',planned_date:details.planned_date,post_details:details,approval_state:'Draft'});
+  });
+  const result=await tools.save({request_id:'stable-request',engine_id:'engine',platform:'Facebook',title:'Post',copy:'Some copy.',content_record_id:'same-record',post_details:details});
+  assert.deepEqual(saved.p_details,details);assert.equal(saved.p_record,'same-record');assert.equal(result.planned_date,details.planned_date);
+  assert.equal(result.image_upload_url,config.contentHqUrl+'/studio/same-record#post-details');assert.match(result.message,/does not transfer an image/);
+});
+test('readback, detail updates and exact-copy approvals use scoped owner RPCs',async()=>{
+  const calls=[];const tools=mcpTools(config,'owner-token',async(url,init)=>{calls.push({url,body:JSON.parse(init.body)});assert.equal(init.headers.Authorization,'Bearer owner-token');return json(url.endsWith('get_content_post_package')?[{record_id:'record',images:[],versions:[]}]:{record_id:'record',published:false})});
+  const records=await tools.records({query:'Ciara'});assert.equal(records.records[0].images.length,0);assert.equal(calls[0].body.p_query,'Ciara');
+  await tools.details({content_record_id:'record',expected_updated_at:'2026-10-16T12:00:00Z',post_details:{planned_date:'2026-10-17'}});
+  assert.equal(calls[1].body.p_expected_updated_at,'2026-10-16T12:00:00Z');assert.equal(calls[1].body.p_details.planned_date,'2026-10-17');
+  await tools.approve({content_record_id:'record',version_id:'version',approved_copy:'Exact approved words.',user_approved:true});
+  assert.equal(calls[2].body.p_approved_copy,'Exact approved words.');assert.equal(calls[2].body.p_user_approved,true);
+  assert.ok(calls.every(call=>!call.url.includes('/publishing_records')));
+});
 test('drafts naming a retrieved participant are blocked before any save',async()=>{
   let saved=false;const tools=mcpTools(config,'token',async(url)=>{if(url!==config.knowledgeUrl)saved=true;return json({document})});
   await assert.rejects(tools.save({request_id:'request',engine_id:'engine',platform:'Facebook',title:'A thought',copy:'Private Participant told me this.',source_ids:[documentId]}),/identifying/);assert.equal(saved,false);
@@ -77,9 +97,9 @@ test('resource-bound OAuth supports real MCP discovery using UserInfo, with owne
     const initialized=await post({Authorization:`Bearer ${token}`},{jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'integration-test',version:'1'}}});
     assert.equal(initialized.status,200);assert.equal((await initialized.json()).result.serverInfo.name,'olivia-pope');
     const list=await post({Authorization:`Bearer ${token}`},{jsonrpc:'2.0',id:2,method:'tools/list',params:{}});
-    const tools=(await list.json()).result.tools;assert.deepEqual(tools.map(t=>t.name),['search','fetch','list_content_engines','save_content_draft']);
+    const tools=(await list.json()).result.tools;assert.deepEqual(tools.map(t=>t.name),['search','fetch','list_content_engines','save_content_draft','get_content_record','update_content_details','approve_content_version']);
     assert.equal(tools.find(t=>t.name==='save_content_draft').annotations.readOnlyHint,false);
-    assert.equal(tools.some(t=>/publish|approve|delete/.test(t.name)),false);
+    assert.equal(tools.some(t=>/publish|delete/.test(t.name)),false);
     userInfoOwner='unrelated-owner';
     assert.equal((await post({Authorization:`Bearer ${token}`},{jsonrpc:'2.0',id:3,method:'tools/list',params:{}})).status,401);
   }finally{await new Promise(resolve=>server.close(resolve));server.closeAllConnections()}
