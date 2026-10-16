@@ -1,8 +1,9 @@
-# Olivia MCP — local implementation
+# Olivia MCP — deployed connection
 
 This adds `/mcp` to the existing Olivia server. It reuses the existing Olivia
-Supabase library and Content HQ records. It is disabled until configured.
-It has not been deployed or connected to ChatGPT.
+Supabase library and Content HQ records. It is deployed on the existing Olivia Railway service.
+ChatGPT authorization remains pending exact callback verification and owner consent.
+See Content HQ docs/unified-social-agent.md for the release record.
 
 ## Tools
 
@@ -20,7 +21,7 @@ after the library migration. Originals use keyword search; extracted lessons
 also use the existing semantic search when available. Summary-only calls are
 explicitly labeled. A source being stored does not prove its transcript is complete.
 
-## Deployment order (not performed)
+## Deployment order and maintenance reference
 
 1. Verify Olivia owner sign-in, then review and apply the existing owner-access
    policies and the pre-existing `20261015000001_remove_open_access.sql` migration.
@@ -32,8 +33,11 @@ explicitly labeled. A source being stored does not prove its transcript is compl
 3. Apply Content HQ migrations `202610160001_generation_context.sql` and
    `202610160003_mcp_drafts_and_oauth.sql`. Deploy its consent/source-reader
    pages and generation integration to the existing Content HQ app.
-4. Set server-only Olivia connection variables in Content HQ. Never expose the
-   private agent key in browser configuration or put it in ChatGPT instructions.
+4. Set the Olivia source URLs, owner binding and
+   `OLIVIA_USE_CONTENT_HQ_SESSION=true` in Content HQ. Its existing signed-in
+   owner token is verified by Olivia; no shared agent key is needed in Vercel.
+   Olivia pins `CONTENT_HQ_AUTH_URL`, `CONTENT_HQ_AUTH_PUBLIC_KEY` and
+   `CONTENT_HQ_OWNER_ID` in its existing server secret store.
 5. Enable the existing Content HQ Supabase OAuth server, set its consent path
    to `/oauth/consent`, and verify asymmetric JWT signing with public JWKS.
    Do not blindly rotate keys or overwrite an existing access-token hook.
