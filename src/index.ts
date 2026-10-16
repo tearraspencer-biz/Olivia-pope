@@ -7,8 +7,13 @@ import { createResearchRequestRouter } from './api/research-request.js'
 import { createMeetingIngestRouter } from './api/meeting-ingest.js'
 import { createVideoIngestRouter } from './api/video-ingest.js'
 import { createExtractRouter } from './api/extract.js'
+import { createMcpRouter } from './mcp/router.js'
 
 const app = express()
+
+// Mount before the legacy wildcard CORS and large-body research endpoints.
+// Each MCP request validates its OAuth audience, registered client and owner.
+app.use(createMcpRouter())
 
 // CORS — allow dashboard to call API endpoints
 app.use((req, res, next) => {
