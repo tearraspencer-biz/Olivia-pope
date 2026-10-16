@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Olivia Pope — Research Agent for Impactful Financial Solutions",
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "build": "tsc",
     "test": "npm run build && node --test tests/*.test.mjs",
