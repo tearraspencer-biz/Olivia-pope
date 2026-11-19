@@ -94,4 +94,15 @@ async function startPolling(attempt = 1): Promise<void> {
   }
 }
 
-startPolling()
+// Telegram allows one listener per bot, and this bot is shared with the
+// OpenClaw chat assistant (olivia-pope-ifs). Both listening knocked each other
+// off ("409 Conflict: terminated by other getUpdates request"), so whichever
+// held the connection got Tearra's message. The chat assistant owns the
+// conversation; this service only sends (the daily brief notice), which needs
+// no listener. Set TELEGRAM_POLLING=true to bring back /research, /person and
+// /brief here — only after giving this service its own bot token.
+if (process.env.TELEGRAM_POLLING === 'true') {
+  startPolling()
+} else {
+  console.log('Telegram listening off — sending only (TELEGRAM_POLLING is not "true").')
+}
