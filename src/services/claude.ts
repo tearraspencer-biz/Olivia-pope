@@ -42,7 +42,67 @@ export async function runResearch(topic: string): Promise<string> {
   return textBlock.text
 }
 
-// Step 2: Structure the research output into a DB-ready JSON object with 8-layer breakdown
+/**
+ * Ask Claude to file research by filling in a tool call rather than writing
+ * JSON in prose.
+ *
+ * Prose JSON broke on long Medicare briefs ("Expected ',' or '}' after property
+ * value in JSON at position 6925", "Bad escaped character in JSON") — one
+ * unescaped quote in a regulation citation lost the whole entry. Tool input
+ * arrives as structured data, so there is nothing hand-written to break.
+ *
+ * full_text is not requested: the model used to re-type the entire report
+ * inside the JSON, the longest and most fragile field. The original research
+ * output is attached in code instead, which also preserves it exactly.
+ */
+async function fileWithTool(
+  prompt: string,
+  researchOutput: string,
+  categories: CategoryRecord[],
+  projects: ProjectRecord[]
+): Promise<StructuredResearch> {
+  const tool: Anthropic.Tool = {
+    name: 'file_research',
+    description: 'File the structured research record.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_title: { type: 'string' },
+        output_title: { type: 'string' },
+        summary: { type: 'string' },
+        source_notes: { type: 'string' },
+        category_id: { type: 'string', enum: categories.map((c) => c.id) },
+        project_id: { type: ['string', 'null'] },
+        tags: { type: 'array', items: { type: 'string' } },
+        plain_language_breakdown: { type: 'string' },
+      },
+      required: ['task_title', 'output_title', 'summary', 'category_id', 'tags', 'plain_language_breakdown'],
+    },
+  }
+
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 8192,
+    system: 'You are a research filing assistant. File the research by calling file_research.',
+    tools: [tool],
+    tool_choice: { type: 'tool', name: tool.name },
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  const call = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
+  if (!call) throw new Error(`Structuring call returned no output (stop_reason: ${response.stop_reason})`)
+
+  const input = call.input as Omit<StructuredResearch, 'full_text'>
+  return {
+    ...input,
+    source_notes: input.source_notes ?? '',
+    // Unknown ids are dropped rather than failing the entry: a project is optional.
+    project_id: projects.some((p) => p.id === input.project_id) ? input.project_id : null,
+    full_text: researchOutput,
+  }
+}
+
+// Step 2: Structure the research output into a DB-ready record with 8-layer breakdown
 export async function structureResearch(
   topic: string,
   researchOutput: string,
@@ -84,8 +144,7 @@ ${projectList}
 
 ---
 
-Return ONLY a valid JSON object. No preamble. No explanation. No markdown fences.
-Use this exact structure:
+Call file_research. What each field must contain:
 
 {
   "task_title": "Short descriptive title for the research task. Max 80 characters.",
@@ -93,8 +152,6 @@ Use this exact structure:
   "output_title": "Full descriptive title for the research output. Max 120 characters.",
 
   "summary": "2 to 5 sentences. Written for agent retrieval — clear, specific, informative. Describes what this research covers and why it matters. Not plain language — this is for machine reading. Max 500 characters.",
-
-  "full_text": "The complete research output fully preserved. Do not truncate or summarize.",
 
   "source_notes": "Any sources, links, or references cited. Empty string if none.",
 
@@ -114,27 +171,7 @@ Tag rules:
 - Do not use generic tags like research, information, overview, or update
 - Good tag examples: ichra-2026, small-employers, chattanooga, medicare-advantage, ai-automation, health-insurance-agents`
 
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 8192,
-    system:
-      'You are a research filing assistant. Return only a valid JSON object — no markdown, no explanation, no preamble.',
-    messages: [{ role: 'user', content: structuringPrompt }],
-  })
-
-  const textBlock = response.content.find((b) => b.type === 'text')
-  if (!textBlock || textBlock.type !== 'text') {
-    throw new Error('Structuring call returned no output')
-  }
-
-  // Strip markdown fences if Claude included them despite instructions
-  const jsonText = textBlock.text
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim()
-
-  const structured = JSON.parse(jsonText) as StructuredResearch
+  const structured = await fileWithTool(structuringPrompt, researchOutput, categories, projects)
 
   // Validate required fields
   const required = ['task_title', 'output_title', 'summary', 'full_text', 'category_id']
@@ -157,7 +194,7 @@ Tag rules:
   return structured
 }
 
-// Step 2 (people): Structure people research into a DB-ready JSON object with 8-layer breakdown
+// Step 2 (people): Structure people research into a DB-ready record with 8-layer breakdown
 export async function structurePeopleResearch(
   personName: string,
   specificTopic: string | null,
@@ -196,7 +233,7 @@ ${categoryList}
 AVAILABLE PROJECTS (select one or null — use the exact id):
 ${projectList}
 
-Return ONLY a valid JSON object. No preamble. No explanation. No markdown fences.
+Call file_research. What each field must contain:
 
 {
   "task_title": "Research: ${personName} — [primary topic of their work, max 60 chars]",
@@ -204,8 +241,6 @@ Return ONLY a valid JSON object. No preamble. No explanation. No markdown fences
   "output_title": "${personName}: [what this research covers — their primary framework or focus]. Max 120 chars.",
 
   "summary": "2 to 5 sentences for agent retrieval. Who this person is, what they primarily teach, and the single most applicable idea for Tearra's business. Not plain language — structured for machine reading. Max 500 chars.",
-
-  "full_text": "The complete research output fully preserved. Do not truncate.",
 
   "source_notes": "Their YouTube channel URL, website, book titles, or other primary sources found. Empty string if none confirmed.",
 
@@ -225,26 +260,7 @@ Tag rules for people research:
 - Total tags: 4 to 6 maximum
 - Do not use generic tags like research, person, or youtube`
 
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 8192,
-    system:
-      'You are a research filing assistant. Return only a valid JSON object — no markdown, no explanation, no preamble.',
-    messages: [{ role: 'user', content: structuringPrompt }],
-  })
-
-  const textBlock = response.content.find((b) => b.type === 'text')
-  if (!textBlock || textBlock.type !== 'text') {
-    throw new Error('People structuring call returned no output')
-  }
-
-  const jsonText = textBlock.text
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim()
-
-  const structured = JSON.parse(jsonText) as StructuredResearch
+  const structured = await fileWithTool(structuringPrompt, researchOutput, categories, projects)
 
   const required = ['task_title', 'output_title', 'summary', 'full_text', 'category_id']
   for (const field of required) {
